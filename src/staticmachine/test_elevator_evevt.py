@@ -1,6 +1,6 @@
 import unittest
 
-from src.elevator_event import *
+from src.staticmachine.elevator_event import *
 
 
 class DiscreteEventTest(unittest.TestCase):

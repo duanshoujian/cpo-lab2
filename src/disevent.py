@@ -6,165 +6,117 @@ event = namedtuple("Event", "clock node var val")
 source_event = namedtuple("SourceEvent", "var val latency")
 
 
-class StateMachine(object):
+class StateMachine:
+    def __init__(self):
+        self.handlers = {}  # State transfer function dictionary
+        self.startState = None  # initial state
+        self.endStates = []  # Final state list
+        self.runResult = 0  # The result of function run
+        self.state = []  # To collect all state
+        self.trans = {}  # Transfer process information
+        self.trans_to = {} # "Key" state can be transferred to "value" state
 
-    def __init__(self, name="anonymous"):
-        self.name = name
-        self.inputs = OrderedDict()
-        self.outputs = OrderedDict()
-        self.nodes = []
-        self.state_history = []
-        self.event_history = []
 
-    def arg_type(num_args, type_args):
-        def trace(f):
-            def traced(self, *args, **kwargs):
-                # print("{}(*{}, **{}) START".format(f.__name__, args, kwargs))
-                if type(args[num_args - 1]) == type_args:
-                    return f(self, *args, **kwargs)
-                else:
-                    print("Wrong Input!")
-                    print(type(args[num_args - 1]))
-                    return 'Wrong Input!'
+    def ParamCheck(*ty2):
+        def common(fun):
+            def deal(*fun_x):
+                ty = map(to_check_fun, ty2)
+                if ty:
+                    x_list = [a for a in fun_x]
+                    x_list_it = iter(x_list)
+                    RESULT.clear()
+                    for t_check in ty:
+                        r = t_check(x_list_it.__next__())
+                        if r is False:
+                            RESULT.append('false property')
+                            return 'false property'
+                    RESULT.append('true property')
+                return fun(*fun_x)
 
-            return traced
+            return deal
+        return common
 
-        return trace
 
-    @arg_type(1, str)
-    def input_port(self, name, latency=1):
 
-        self.inputs[name] = latency
+    @ParamCheck(object,str,object,(list,type(None)),int)
+    def add_state(self, name, handler, trans_to, end_state=0):
+        self.handlers[name] = handler
+        self.state.append(name)
+        self.trans_to[name] = trans_to
+        if end_state:
+            self.endStates.append(name)
 
-    @arg_type(1, str)
-    def output_port(self, name, latency=1):
+    def add_trans_status(self, state, move):
+        self.trans[state] = move
 
-        self.outputs[name] = latency
+    @ParamCheck(object,str)
+    def set_start(self, name):
+        self.startState = name
 
-    @arg_type(1, str)
-    def add_node(self, name, function):
 
-        node = Node(name, function)
-        self.nodes.append(node)
-        return node
+    @ParamCheck(object,list)
+    def run(self, cargo):
+        try:
+            handler = self.handlers[self.startState]
+        except:
+            self.runResult ="must call .set_start() before .run()"
+            raise InitializationError("must call .set_start() before .run()")
+        if not self.endStates:
+            self.runResult ="at least one state must be an end_state"
+            raise InitializationError("at least one state must be an end_state")
 
-    @arg_type(2, int)
-    def _source_events2events(self, source_events, clock):
-        events = []
-        for se in source_events:
-            source_latency = clock + se.latency + self.inputs.get(se.var, 0)
-            if se.var in self.outputs:
-                target_latency = self.outputs[se.var]
-                events.append(event(
-                    clock=source_latency + target_latency,
-                    node=None,
-                    var=se.var,
-                    val=se.val,
-                ))
-            for node in self.nodes:
-                if se.var in node.inputs:
-                    target_latency = node.inputs[se.var]
-                    events.append(event(
-                        clock=clock + source_latency + target_latency,
-                        node=node,
-                        var=se.var,
-                        val=se.val,
-                    ))
-        return events
-
-    def args_1(f):
-        def trace(self, *args, **kwargs):
-            if len(args) == 1:
-                return f(self, *args, **kwargs)
+        flag = 0
+        for input_data in cargo:
+            new_state = handler(input_data)
+            if new_state in self.endStates:
+                self.runResult = "arrived "+new_state
+                flag = 1
+                break
             else:
-                print("Wrong Input!")
-                return 'Wrong Input!'
+                handler = self.handlers[new_state]
+        if flag is 0:
+            self.runResult = "not arrive end state"
 
-        return trace
-
-    @args_1
-    def _pop_next_event(self, events):
-
-        assert len(events) > 0
-        events = sorted(events, key=lambda e: e.clock)
-        event = events.pop(0)
-        return event, events
-
-    def args_0(f):
-        def trace(self, *args, **kwargs):
-            if len(args) == 0:
-                return f(self, *args, **kwargs)
-            else:
-                print("Wrong Input!")
-                return 'Wrong Input!'
-
-        return trace
-
-    @args_0
-    def _state_initialize(self):
-        env = {}
-        for var in self.inputs:
-            env[var] = None
-        return env
-
-    def args_3(f):
-        def trace(self, *args, **kwargs):
-            if len(args) == 3:
-                return f(self, *args, **kwargs)
-            else:
-                print("Wrong Input!")
-                return 'Wrong Input!'
-
-        return trace
-
-    # @args_3
-    def execute(self, *source_events, limit=100, events=None):
-
-        if events is None: events = []
-        state = self._state_initialize()
-        clock = 0
-        self.state_history = [(clock, copy.copy(state))]
-        while (len(events) > 0 or len(source_events) > 0) and limit > 0:
-            limit -= 1
-            new_events = self._source_events2events(source_events, clock)
-            events.extend(new_events)
-            if len(events) == 0: break
-            event, events = self._pop_next_event(events)
-            state[event.var] = event.val
-            clock = event.clock
-            source_events = event.node.activate(state) if event.node else []
-            self.state_history.append((clock, copy.copy(state)))
-            self.event_history.append(event)
-        if limit == 0: print("limit reached")
-        return state
-
-    @args_0
+    @ParamCheck(object)
     def visualize(self):
-
         res = []
         res.append("digraph G {")
-        res.append(" rankdir=LR;")
-        for v in self.inputs:
-            res.append(" {}[shape=rarrow];".format(v))
-        for v in self.outputs:
-            res.append(" {}[shape=rarrow];".format(v))
-        for i, n in enumerate(self.nodes):
-            res.append(' n_{}[label="{}"];'.format(i, n.name))
-        for i, n in enumerate(self.nodes):
-            for v in n.inputs:
-                if v in self.inputs:
-                    res.append(' {} -> n_{};'.format(v, i))
-            for j, n2 in enumerate(self.nodes):
-                if i == j: continue
-                for v in n.inputs:
-                    if v in n2.outputs:
-                        res.append(' n_{} -> n_{}[label="{}"];'.format(j, i, v))
-            for v in n.outputs:
-                if v in self.outputs:
-                    res.append(' n_{} -> {};'.format(i, v))
+        res.append("  rankdir=LR;")
+        for v in self.state:
+            res.append("  {}[];".format(v))
+
+
+        for v in self.state:
+            if self.handlers[v] is not None:
+                for value in self.trans_to[v]:
+                    res.append('  {} -> {}[label="{}"];'.format(v, value, self.trans[value]))
+
+
         res.append("}")
+
         return "\n".join(res)
 
+def trace(f):
+    def traced(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        finally:
+            print("{} FINISH".format(f.__name__))
+    return traced
+
+
+
+class InitializationError(Exception):
+    def __init__(self,arg):
+        self.arg = arg
+
+    def __str__(self):
+        print(self.arg)
+
+RESULT = []
+def to_check_fun(t):
+
+        return lambda x: isinstance(x, t)
 
 class Node(object):
 
@@ -180,11 +132,9 @@ class Node(object):
     def arg_type(num_args, type_args):
         def trace(f):
             def traced(self, *args, **kwargs):
-                # print("{}(*{}, **{}) START".format(f.__name__, args, kwargs))
                 if type(args[num_args - 1]) == type_args:
                     return f(self, *args, **kwargs)
                 else:
-                    print("Wrong Input!")
                     print(type(args[num_args - 1]))
                     return 'Wrong Input!'
 
@@ -220,3 +170,6 @@ class Node(object):
                 source_event(var, val, latency)
             )
         return output_events
+
+
+
